@@ -1,0 +1,13 @@
+{
+  "name": "deep-exam-knowledge-bot",
+  "version": "1.0.0",
+  "description": "WhatsApp Exam Quiz Bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.5",
+    "pino": "^8.17.0"
+  }
+}
