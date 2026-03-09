@@ -37,7 +37,7 @@ sock.ev.on("creds.update", saveCreds)
 
 if(!sock.authState.creds.registered){
 
-rl.question("Enter WhatsApp number (234XXXXXXXXXX): ", async(number)=>{
+rl.question("Enter WhatsApp number (2349154472946): ", async(number)=>{
 
 const code = await sock.requestPairingCode(number)
 
