@@ -4,142 +4,167 @@ global.crypto = crypto.webcrypto
 const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } = require("@whiskeysockets/baileys")
 const P = require("pino")
 
-const OWNER = "2349154472946" // Your phone number
+// Put your phone number here as: country code + subscriber number (NO leading +)
+// Example Nigeria: 2349154472946
+const OWNER = "2349154472946"
 
 async function startBot(){
 
   const { state, saveCreds } = await useMultiFileAuthState("./session")
-
   const { version } = await fetchLatestBaileysVersion()
 
   const sock = makeWASocket({
     version,
     logger: P({ level: "silent" }),
     auth: state,
+    printQRInTerminal: false, // we are using pairing-code flow, not QR
     shouldSyncHistoryMessage: false,
   })
 
-  let isHandlingPairing = false
+  // Useful state for retries
+  let pairingInProgress = false
+  let pairingAttempts = 0
+  const maxPairingAttempts = 3
 
+  // Connection updates — log everything to help debugging
   sock.ev.on("connection.update", async (update) => {
-    const { connection, qr, lastDisconnect } = update
+    console.log("connection.update:", JSON.stringify(update, null, 2))
 
-    if(qr){
-      console.log("📱 Scan QR Code above with your WhatsApp")
-    }
+    const { connection, lastDisconnect } = update
 
-    if(connection === "open"){
+    if (connection === "open") {
       console.log("✅ BOT CONNECTED SUCCESSFULLY")
+      pairingInProgress = false
     }
 
-    if(connection === "close"){
-      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut
-      
-      if(shouldReconnect){
-        console.log("🔄 Reconnecting...")
-        setTimeout(() => startBot(), 3000)
+    if (connection === "close") {
+      console.log("❌ Connection closed.")
+      if (lastDisconnect) {
+        console.error("Last disconnect error:", lastDisconnect?.error ?? lastDisconnect)
+      }
+
+      // If logged out, we won't keep reconnecting
+      const loggedOut = lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut
+      if (!loggedOut) {
+        console.log("🔄 Reconnecting in 3s...")
+        setTimeout(startBot, 3000)
       } else {
-        console.log("❌ Bot logged out - Delete session folder and restart")
+        console.log("⚠️ Logged out. Remove session folder and re-run the bot to re-authenticate.")
         process.exit(0)
       }
     }
   })
 
-  // Handle pairing code request
-  sock.ev.on("call", async (node) => {
-    if(node[0].tag === "offer" && node[0].attrs?.from){
-      const incomingNumber = node[0].attrs.from.split("@")[0]
-      console.log("📞 Incoming call from:", incomingNumber)
-    }
-  })
-
-  // Request pairing code if not authenticated yet
-  if(!sock.authState.creds.registered){
-    setTimeout(async () => {
-      if(!isHandlingPairing){
-        isHandlingPairing = true
-        try {
-          // Request pairing code
-          const code = await sock.requestPairingCode(OWNER)
-          
-          console.log("\n")
-          console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-          console.log("👑 DEEP_EXAM KNOWLEDGE BOT 👑")
-          console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-          console.log("📱 PAIRING CODE:")
-          console.log(code)
-          console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-          console.log("✅ Enter this code in WhatsApp")
-          console.log("   Settings > Linked Devices > Link a Device")
-          console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-
-        } catch (error) {
-          console.error("❌ Error requesting pairing code:", error.message)
-          isHandlingPairing = false
-        }
-      }
-    }, 3000)
-  }
-
+  // Save credentials when they update
   sock.ev.on("creds.update", saveCreds)
 
-  sock.ev.on("messages.upsert", async ({ messages }) => {
-    const m = messages[0]
-
-    if(!m.message) return
-
-    const from = m.key.remoteJid
-    const isGroup = from.includes("@g.us")
-
-    let body = ""
-
-    if(m.message.conversation) {
-      body = m.message.conversation
-    } else if(m.message.extendedTextMessage) {
-      body = m.message.extendedTextMessage.text
+  // Function to request pairing code and print exact instructions
+  async function requestPairingCodeFlow(){
+    if (pairingInProgress) return
+    if (pairingAttempts >= maxPairingAttempts) {
+      console.error(`❌ Reached ${maxPairingAttempts} pairing attempts. Stop trying.`);
+      return
     }
 
-    if(!body || !body.startsWith(".")) return
-
-    const cmd = body.slice(1).trim().split(" ")[0].toLowerCase()
+    pairingInProgress = true
+    pairingAttempts++
 
     try {
-      // ping command
-      if(cmd === "ping"){
-        await sock.sendMessage(from, { text: "🏓 Pong! Bot is online and active." })
+      console.log(`\n🔐 Requesting pairing code (attempt ${pairingAttempts}/${maxPairingAttempts})...`)
+
+      // IMPORTANT: OWNER must be digits only, country code first, NO leading plus sign.
+      // Example: Nigeria +2349154472946 -> '2349154472946'
+      if (!/^\d+$/.test(OWNER)) {
+        throw new Error("OWNER must contain digits only (no + or spaces). Current OWNER: " + OWNER)
       }
 
-      // menu command
-      if(cmd === "menu"){
-        await sock.sendMessage(from, {
-          text: `👑 *DEEP_EXAM KNOWLEDGE BOT* 👑
+      const pairingCode = await sock.requestPairingCode(OWNER)
 
-*Available Commands:*
+      // pairingCode should be a string (usually 6 digits). Print clear instructions.
+      console.log("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+      console.log("👑 DEEP_EXAM KNOWLEDGE BOT — PAIRING")
+      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+      console.log("Phone number to enter on your phone (exact):", OWNER)
+      console.log("\nOn your phone's WhatsApp app:")
+      console.log("1) Open WhatsApp -> Settings -> Linked Devices")
+      console.log("2) Tap 'Link a Device' -> choose 'Link with phone number' (or similar)")
+      console.log("3) When prompted, enter the phone number exactly as shown above (no +, no spaces).")
+      console.log("4) Enter the code shown below when prompted:")
+      console.log("\nPAIRING CODE:", pairingCode)
+      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+      console.log("⚠️ The code expires quickly. Enter it immediately on the phone and ensure the phone is online.")
+      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
-🔹 .ping - Check if bot is active
-🔹 .menu - Show this menu
-🔹 .jamb - Get JAMB exam tips
-🔹 .waec - Get WAEC exam tips
-🔹 .sudo - Admin commands
-🔹 .tag - Mention users
-
-━━━━━━━━━━━━━━━━━━
-👨‍💼 Owner: +${OWNER}
-━━━━━━━━━━━━━━━━━━`
-        })
+      // After requesting code, wait for connection update to go open.
+      // We'll keep pairingInProgress true until connection opens or timeout.
+      const waitTimeoutMs = 60_000 // 60s
+      const start = Date.now()
+      while (Date.now() - start < waitTimeoutMs) {
+        // If connected, break
+        if (sock.user && sock.user.id) {
+          console.log("Connected while waiting for pairing to finish.")
+          pairingInProgress = false
+          return
+        }
+        // Sleep small interval
+        await new Promise(r => setTimeout(r, 1000))
       }
 
-      // Add more commands here as needed
-      if(cmd === "jamb"){
-        await sock.sendMessage(from, { text: "📚 JAMB Exam Tips coming soon..." })
-      }
+      console.warn("⏳ Pairing timeout reached — if you didn't enter the code on the phone, it may have expired.")
+      pairingInProgress = false
 
-      if(cmd === "waec"){
-        await sock.sendMessage(from, { text: "📚 WAEC Exam Tips coming soon..." })
-      }
+    } catch (err) {
+      console.error("❌ requestPairingCode error:", err?.message ?? err)
+      pairingInProgress = false
+    }
+  }
 
-    } catch (error) {
-      console.error("Error handling message:", error)
+  // If not registered, start pairing flow after socket ready
+  // Wait briefly for socket to be ready to accept pairing code request
+  setTimeout(() => {
+    try {
+      // If already registered, nothing to do
+      if (sock.authState?.creds?.registered) {
+        console.log("Already registered. No pairing required.")
+        return
+      }
+      requestPairingCodeFlow()
+    } catch (err) {
+      console.error("Error starting pairing flow:", err)
+    }
+  }, 1500)
+
+  // Messages handler
+  sock.ev.on("messages.upsert", async ({ messages }) => {
+    const m = messages[0]
+    if (!m || !m.message) return
+
+    const from = m.key.remoteJid
+    let body = ""
+    if (m.message.conversation) body = m.message.conversation
+    else if (m.message.extendedTextMessage) body = m.message.extendedTextMessage.text
+    if (!body || !body.startsWith(".")) return
+
+    const cmd = body.slice(1).trim().split(" ")[0].toLowerCase()
+    try {
+      if (cmd === "ping") {
+        await sock.sendMessage(from, { text: "🏓 Pong! Bot Active." })
+      } else if (cmd === "menu") {
+        await sock.sendMessage(from, { text:
+`👑 DEEP_EXAM KNOWLEDGE BOT 👑
+
+Commands:
+.ping
+.menu
+.jamb
+.waec
+.sudo
+.tag
+
+Owner: +${OWNER}`})
+      }
+    } catch (err) {
+      console.error("Error responding to message:", err)
     }
   })
 }
