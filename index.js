@@ -1,7 +1,6 @@
 const crypto = require("crypto")
 global.crypto = crypto.webcrypto
 
-const readline = require("readline")
 const axios = require("axios")
 
 const { 
@@ -13,11 +12,6 @@ fetchLatestBaileysVersion
 const P = require("pino")
 
 const OWNER = "2349154472946"
-
-const rl = readline.createInterface({
-input: process.stdin,
-output: process.stdout
-})
 
 async function startBot(){
 
@@ -35,21 +29,27 @@ syncFullHistory: false
 
 sock.ev.on("creds.update", saveCreds)
 
+/* ===== PAIRING CODE ===== */
+
 if(!sock.authState.creds.registered){
 
-rl.question("Enter WhatsApp number (2349154472946): ", async(number)=>{
+setTimeout(async () => {
 
-const code = await sock.requestPairingCode(number)
+let code = await sock.requestPairingCode(OWNER)
 
 console.log("")
 console.log("=================================")
 console.log("👑 DEEP EXAM KNOWLEDGE BOT")
 console.log("PAIRING CODE:", code)
+console.log("Open WhatsApp → Linked Devices")
+console.log("Tap 'Link with phone number'")
 console.log("=================================")
 
-})
+},4000)
 
 }
+
+/* ===== MESSAGE LISTENER ===== */
 
 sock.ev.on("messages.upsert", async ({ messages })=>{
 
@@ -94,7 +94,6 @@ text:`👑 DEEP EXAM KNOWLEDGE BOT 👑
 🔹tag🔹
 🔹owner🔹
 🔹speed🔹
-🔹time🔹
 
 🤖 AI CHAT
 
