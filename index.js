@@ -1,92 +1,71 @@
-const crypto = require("crypto")
-global.crypto = crypto.webcrypto
+const crypto = require("crypto"); // Just require, don't use webcrypto in Node.js
 
-const axios = require("axios")
-
+const axios = require("axios");
 const { 
-default: makeWASocket, 
-useMultiFileAuthState, 
-fetchLatestBaileysVersion 
-} = require("@whiskeysockets/baileys")
+  default: makeWASocket, 
+  useMultiFileAuthState, 
+  fetchLatestBaileysVersion 
+} = require("@whiskeysockets/baileys");
+const P = require("pino");
 
-const P = require("pino")
+const OWNER = "2349154472946";
 
-const OWNER = "2349154472946"
+async function startBot() {
+  const { state, saveCreds } = await useMultiFileAuthState("./session");
+  const { version } = await fetchLatestBaileysVersion();
 
-async function startBot(){
+  const sock = makeWASocket({
+    version,
+    logger: P({ level: "silent" }),
+    auth: state,
+    browser: ["DEEP_EXAM_KNOWLEDGE_BOT", "Chrome", "1.0"],
+    syncFullHistory: false
+  });
 
-const { state, saveCreds } = await useMultiFileAuthState("./session")
+  sock.ev.on("creds.update", saveCreds);
 
-const { version } = await fetchLatestBaileysVersion()
+  // PAIRING CODE (first-time only)
+  if (!sock.authState.creds.registered) {
+    setTimeout(async () => {
+      let code = await sock.requestPairingCode(OWNER);
+      console.log("");
+      console.log("=================================");
+      console.log("👑 DEEP EXAM KNOWLEDGE BOT");
+      console.log("PAIRING CODE:", code);
+      console.log("Open WhatsApp → Linked Devices");
+      console.log("Tap 'Link with phone number'");
+      console.log("=================================");
+    }, 4000);
+  }
 
-const sock = makeWASocket({
-version,
-logger: P({ level: "silent" }),
-auth: state,
-browser: ["DEEP_EXAM_KNOWLEDGE_BOT","Chrome","1.0"],
-syncFullHistory: false
-})
+  // MESSAGE LISTENER
+  sock.ev.on("messages.upsert", async ({ messages }) => {
+    try {
+      const m = messages[0];
+      if (!m.message) return;
 
-sock.ev.on("creds.update", saveCreds)
+      const from = m.key.remoteJid;
+      const isGroup = from.endsWith("@g.us");
+      let body = "";
 
-/* ===== PAIRING CODE ===== */
+      if (m.message.conversation) body = m.message.conversation;
+      else if (m.message.extendedTextMessage && m.message.extendedTextMessage.text) body = m.message.extendedTextMessage.text;
+      else if (m.message.text) body = m.message.text;
 
-if(!sock.authState.creds.registered){
+      if (!body || !body.startsWith(".")) return;
 
-setTimeout(async () => {
+      const args = body.split(" ");
+      const cmd = args[0].slice(1).toLowerCase();
 
-let code = await sock.requestPairingCode(OWNER)
+      // ping
+      if (cmd === "ping") {
+        await sock.sendMessage(from, { text: "⚡ BOT ONLINE ⚡" });
+      }
 
-console.log("")
-console.log("=================================")
-console.log("👑 DEEP EXAM KNOWLEDGE BOT")
-console.log("PAIRING CODE:", code)
-console.log("Open WhatsApp → Linked Devices")
-console.log("Tap 'Link with phone number'")
-console.log("=================================")
-
-},4000)
-
-}
-
-/* ===== MESSAGE LISTENER ===== */
-
-sock.ev.on("messages.upsert", async ({ messages })=>{
-
-try{
-
-const m = messages[0]
-if(!m.message) return
-
-const from = m.key.remoteJid
-const isGroup = from.endsWith("@g.us")
-
-let body = ""
-
-if(m.message.conversation) body = m.message.conversation
-else if(m.message.extendedTextMessage) body = m.message.extendedTextMessage.text
-
-if(!body.startsWith(".")) return
-
-const args = body.split(" ")
-const cmd = args[0].slice(1).toLowerCase()
-
-/* ===== PING ===== */
-
-if(cmd === "ping"){
-
-await sock.sendMessage(from,{
-text:"⚡ BOT ONLINE ⚡"
-})
-
-}
-
-/* ===== MENU ===== */
-
-if(cmd === "menu"){
-
-await sock.sendMessage(from,{
-text:`👑 DEEP EXAM KNOWLEDGE BOT 👑
+      // menu
+      else if (cmd === "menu") {
+        await sock.sendMessage(from, {
+          text: `👑 DEEP EXAM KNOWLEDGE BOT 👑
 
 🔹menu🔹
 🔹ping🔹
@@ -100,81 +79,61 @@ text:`👑 DEEP EXAM KNOWLEDGE BOT 👑
 .ai Hello
 .ai Explain physics
 `
-})
+        });
+      }
 
-}
-
-/* ===== AI ===== */
-
-if(cmd === "ai"){
-
-let question = args.slice(1).join(" ")
-
-if(!question) return sock.sendMessage(from,{
-text:"Example:\n.ai What is physics?"
-})
-
-let res = await axios.get(`https://api.popcat.xyz/chatbot?msg=${question}&owner=DeepBot&botname=AI-BOT`)
-
-await sock.sendMessage(from,{
-text:`🤖 AI RESPONSE
+      // ai
+      else if (cmd === "ai") {
+        let question = args.slice(1).join(" ");
+        if (!question) return await sock.sendMessage(from, {
+          text: "Example:\n.ai What is physics?"
+        });
+        try {
+          let res = await axios.get(`https://api.popcat.xyz/chatbot?msg=${encodeURIComponent(question)}&owner=DeepBot&botname=AI-BOT`);
+          await sock.sendMessage(from, {
+            text: `🤖 AI RESPONSE
 
 ${res.data.response}`
-})
+          });
+        } catch (err) {
+          await sock.sendMessage(from, { text: "❌ AI Error! Please try again." });
+        }
+      }
 
-}
+      // tag all
+      else if (cmd === "tag") {
+        if (!isGroup) return sock.sendMessage(from, { text: "Group only command" });
+        let group = await sock.groupMetadata(from);
+        let members = group.participants.map(v => v.id);
+        await sock.sendMessage(from, {
+          text: "📢 Attention Everyone!",
+          mentions: members
+        });
+      }
 
-/* ===== TAG ALL ===== */
+      // speed
+      else if (cmd === "speed") {
+        let start = Date.now();
+        let end = Date.now();
+        await sock.sendMessage(from, {
+          text: `⚡ BOT SPEED
+${end - start} ms`
+        });
+      }
 
-if(cmd === "tag"){
-
-if(!isGroup) return sock.sendMessage(from,{text:"Group only command"})
-
-let group = await sock.groupMetadata(from)
-
-let members = group.participants.map(v => v.id)
-
-await sock.sendMessage(from,{
-text:"📢 Attention Everyone!",
-mentions: members
-})
-
-}
-
-/* ===== SPEED ===== */
-
-if(cmd === "speed"){
-
-let start = new Date().getTime()
-let end = new Date().getTime()
-
-await sock.sendMessage(from,{
-text:`⚡ BOT SPEED
-
-${end-start} ms`
-})
-
-}
-
-/* ===== OWNER ===== */
-
-if(cmd === "owner"){
-
-await sock.sendMessage(from,{
-text:`👤 BOT OWNER
+      // owner
+      else if (cmd === "owner") {
+        await sock.sendMessage(from, {
+          text: `👤 BOT OWNER
 
 Number: +${OWNER}
 Bot: DEEP EXAM KNOWLEDGE BOT`
-})
-
+        });
+      }
+    } catch (err) {
+      console.log("Message listener error:", err);
+    }
+  });
 }
 
-}catch(err){
-console.log(err)
-}
-
-})
-
-}
-
-startBot()
+startBot();
